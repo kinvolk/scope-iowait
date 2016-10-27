@@ -10,16 +10,31 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 )
 
+func setupSocket(socket string) (net.Listener, error) {
+	os.Remove(socket)
+	if err := os.MkdirAll(filepath.Dir(socket), 0755); err != nil {
+		return nil, fmt.Errorf("failed to create directory %q: %v", filepath.Dir(socket), err)
+	}
+	listener, err := net.Listen("unix", socket)
+	if err != nil {
+		return nil, fmt.Errorf("failed to listen on %q: %v", socket, err)
+	}
+
+	log.Printf("Listening on: unix://%s", socket)
+	return listener, nil
+}
+
 func main() {
 	hostname, _ := os.Hostname()
 	var (
-		addr   = flag.String("addr", "/var/run/scope/plugins/iowait.sock", "unix socket to listen for connections on")
+		socket = flag.String("addr", "/var/run/scope/plugins/iowait.sock", "unix socket to listen for connections on")
 		hostID = flag.String("hostname", hostname, "hostname of the host running this plugin")
 	)
 	flag.Parse()
@@ -32,25 +47,23 @@ func main() {
 		log.Fatal(err)
 	}
 
-	os.Remove(*addr)
+	os.Remove(*socket)
 	interrupt := make(chan os.Signal, 1)
 	signal.Notify(interrupt, os.Interrupt)
 	go func() {
 		<-interrupt
-		os.Remove(*addr)
+		os.Remove(*socket)
 		os.Exit(0)
 	}()
 
-	listener, err := net.Listen("unix", *addr)
+	listener, err := setupSocket(*socket)
 	if err != nil {
 		log.Fatal(err)
 	}
 	defer func() {
 		listener.Close()
-		os.Remove(*addr)
+		os.Remove(*socket)
 	}()
-
-	log.Printf("Listening on: unix://%s", *addr)
 
 	plugin := &Plugin{HostID: *hostID}
 	http.HandleFunc("/report", plugin.Report)
